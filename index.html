@@ -57,12 +57,12 @@
 })();</script>
 
 <meta charset="UTF-8">
-<title>電力申請 v43.9 修正版</title>
+<title>電力申請 v44.0 修正版</title>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;background:#f8fafc}
+html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;background:#f8fafc;touch-action:none}
 button,input,select,textarea{font-family:inherit;font-size:16px;outline:none}
 #boot{position:fixed;inset:0;background:#1e3a8a;color:#fff;display:flex;align-items:center;justify-content:center;z-index:9999;flex-direction:column;transition:opacity .3s}
 #boot.hide{opacity:0;pointer-events:none}
@@ -115,7 +115,7 @@ button,input,select,textarea{font-family:inherit;font-size:16px;outline:none}
 <div class="app">
   <div class="sidebar" id="sb">
     <div class="head">
-      <h1>電力申請 v43.9 <button class="tg" id="closeBtn">✕</button></h1>
+      <h1>電力申請 v44.0 <button class="tg" id="closeBtn">✕</button></h1>
       <div class="btns">
         <button id="gps">📍GPS</button>
         <button id="save">💾保存</button>
@@ -213,10 +213,22 @@ var map = L.map('map',{doubleClickZoom:false,zoomControl:false}).setView([38.172
 L.control.zoom({position:'topright'}).addTo(map);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'©OSM'}).addTo(map);
 var layer=L.layerGroup().addTo(map);
+// ⑤ モバイル操作最適化
+map.dragging.enable();
+map.touchZoom.enable();
+map.doubleClickZoom.disable();
+map.off('dblclick'); // 完全防止
 var actionStack=[]; // ① 削除復元対応
 
 function pushAdd(l){actionStack.push({type:'add',layer:l});}
 function pushDel(l){actionStack.push({type:'del',layer:l});}
+function pushMove(layer, prev){
+  actionStack.push({
+    type:'move',
+    layer:layer,
+    prev: JSON.parse(JSON.stringify(prev))
+  });
+}
 
 var tool=null,tmp=[],tempLine=null,polyPoints=[],editMode=false,tempRect=null;
 var labelCounter=1,transCounter=1,pending=null;
@@ -237,9 +249,11 @@ document.querySelectorAll('.tools button[data-t]').forEach(b=>{
     if(tool) b.classList.add('on');
     if(tempLine){map.removeLayer(tempLine);tempLine=null;}
     toggleEdit(tool==='edit');
+    map.getContainer().style.cursor = '';
     if(tool==='del'){map.getContainer().style.cursor='crosshair';show('削除モード:消したい物をタップ');}
-    else if(tool==='bldf'){map.getContainer().style.cursor='';show('自由:クリック追加、DblClick確定、ESC取消');}
-    else{map.getContainer().style.cursor='';show(tool?b.textContent:'解除');}
+    else if(tool==='bldf'){show('自由:クリック追加、DblClick確定、ESC取消');}
+    else if(tool==='edit'){map.getContainer().style.cursor='move';}
+    else{show(tool?b.textContent:'解除');}
   };
 });
 
@@ -255,8 +269,8 @@ function addToLayer(l){
       return false;
     }
   });
-  // ② ダブルクリックでラベル編集
-  if(l instanceof L.CircleMarker){
+  // ② ダブルクリックでラベル編集 + blur確定
+  if(l instanceof L.Marker && !(l instanceof L.CircleMarker)){
     l.on('dblclick', function(e){
       if(tool) return;
       var tt=l.getTooltip();
@@ -270,6 +284,10 @@ function addToLayer(l){
           var sel=window.getSelection();
           sel.removeAllRanges();
           sel.addRange(range);
+          // ④ blur確定
+          el.addEventListener('blur', function(){
+            el.innerText = el.innerText.trim() || '名称未設定';
+          }, {once:true});
         }
       }
       L.DomEvent.stopPropagation(e);
@@ -300,12 +318,12 @@ $('inputOk').onclick=()=>{
   if(!pending) return;
   var name=nameInput.value.trim()||'名称未設定';
   var ll=pending.latlng;
-  var m=L.circleMarker(ll,{
-    radius:pending.type==='pole'?7:8,
-    color:pending.type==='pole'?'#000':'red',
-    fillColor:'#fff',
-    fillOpacity:1,
-    weight:3
+  var isPole = pending.type==='pole';
+  // draggableマーカーに変更（編集Undo対応）
+  var iconHtml = `<div style="width:${isPole?14:16}px;height:${isPole?14:16}px;border:3px solid ${isPole?'#000':'red'};background:#fff;border-radius:50%;box-shadow:0 0 2px rgba(0,0,0,0.5)"></div>`;
+  var m = L.marker(ll, {
+    draggable:true,
+    icon: L.divIcon({className:'', html:iconHtml, iconSize:[isPole?14:16,isPole?14:16], iconAnchor:[isPole?7:8,isPole?7:8]})
   });
   // ② contenteditableなツールチップ
   m.bindTooltip('<div contenteditable="true" style="outline:none">'+name+'</div>',{permanent:true,direction:'top',offset:[0,-10],className:'pole-label'}).openTooltip();
@@ -324,7 +342,7 @@ map.on('mousemove', function(e){
     }
     var w = map.distance(tmp[0], L.latLng(tmp[0].lat, e.latlng.lng));
     var h = map.distance(tmp[0], L.latLng(e.latlng.lat, tmp[0].lng));
-    hint.textContent = '建物: ' + w.toFixed(1) + 'm × ' + h.toFixed(1) + 'm (クリックで確定)';
+    hint.textContent = '建物: ' + w.toFixed(2) + 'm × ' + h.toFixed(2) + 'm (クリックで確定)';
     hint.classList.add('show');
   }
 });
@@ -371,7 +389,21 @@ map.on('dblclick',()=>{if(tool==='bldf')finishPoly();});
 
 function toggleEdit(on){
   editMode=on;
-  layer.eachLayer(l=>{if(l.dragging){on?l.dragging.enable():l.dragging.disable();}});
+  layer.eachLayer(l=>{
+    if(l.dragging){
+      if(on){
+        l.on('dragstart', function(){
+          l._prevLatLng = l.getLatLng();
+        });
+        l.on('dragend', function(){
+          pushMove(l, l._prevLatLng);
+        });
+        l.dragging.enable();
+      }else{
+        l.dragging.disable();
+      }
+    }
+  });
   map.getContainer().style.cursor=on?'move':'';
   if(on) show('編集:ドラッグで移動');
 }
@@ -385,17 +417,25 @@ $('gps').onclick=()=>{
       var lat=p.coords.latitude,lng=p.coords.longitude;
       map.setView([lat,lng],18);
       setTimeout(()=>map.invalidateSize(true),100);
-      var m=L.marker([lat,lng]).bindPopup('現在地<br>'+lat.toFixed(6)+','+lng.toFixed(6)).openPopup();
+      var m=L.marker([lat,lng],{draggable:true}).bindPopup('現在地<br>'+lat.toFixed(6)+','+lng.toFixed(6)).openPopup();
       addToLayer(m);
       $('jusho').value=lat.toFixed(6)+','+lng.toFixed(6);
       addrstat.textContent='✓';show('GPS成功');
+      // ③ 逆ジオコーディング
+      fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&accept-language=ja`)
+      .then(r=>r.json())
+      .then(d=>{
+        if(d.display_name){
+          $('jusho').value=d.display_name;
+        }
+      }).catch(()=>{});
     },
     err=>{
       addrstat.textContent='×';
       show('GPS失敗: '+err.message);
       map.setView([35.6812,139.7671],16);
     },
-    {enableHighAccuracy:true,timeout:10000,maximumAge:0}
+    {enableHighAccuracy:false,timeout:15000,maximumAge:30000}
   );
 };
 
@@ -422,10 +462,19 @@ $('save').onclick=()=>{
       e1:$('e1').checked,e2:$('e2').checked,e3:$('e3').checked,
       e4:$('e4').checked,e5:$('e5').checked,e6:$('e6').checked
     };
-    localStorage.setItem('denryoku_v43',JSON.stringify(data));
+    const STORAGE_KEY = 'denryoku_v44';
+    localStorage.setItem(STORAGE_KEY,JSON.stringify(data));
     var mapData=[];
     layer.eachLayer(l=>{
-      if(l instanceof L.CircleMarker){
+      if(l instanceof L.Marker && !(l instanceof L.CircleMarker)){
+        var tt=l.getTooltip();
+        var tip=null;
+        if(tt){
+          var el=tt.getElement();
+          tip=el?el.innerText.trim():tt.getContent().replace(/<[^>]*>/g,'');
+        }
+        mapData.push({type:'marker',latlng:l.getLatLng(),options:l.options,tooltip:tip});
+      } else if(l instanceof L.CircleMarker){
         var tt=l.getTooltip();
         var tip=null;
         if(tt){
@@ -433,22 +482,21 @@ $('save').onclick=()=>{
           tip=el?el.innerText.trim():tt.getContent().replace(/<[^>]*>/g,'');
         }
         mapData.push({type:'circlemarker',latlng:l.getLatLng(),options:l.options,tooltip:tip});
-      } else if(l instanceof L.Marker && !(l instanceof L.CircleMarker)){
-        mapData.push({type:'marker',latlng:l.getLatLng(),options:l.options});
       } else if(l instanceof L.Polyline && !(l instanceof L.Polygon)){
         mapData.push({type:'polyline',latlngs:l.getLatLngs(),options:l.options});
       } else if(l instanceof L.Polygon){
         mapData.push({type:'polygon',latlngs:l.getLatLngs(),options:l.options});
       }
     });
-    localStorage.setItem('denryoku_map',JSON.stringify(mapData));
+    localStorage.setItem(STORAGE_KEY+'_map',JSON.stringify(mapData));
     show('保存完了');
   }catch(e){show('保存失敗');}
 };
 
 $('load').onclick=()=>{
   try{
-    var d=JSON.parse(localStorage.getItem('denryoku_v43')||'{}');
+    const STORAGE_KEY = 'denryoku_v44';
+    var d=JSON.parse(localStorage.getItem(STORAGE_KEY)||'{}');
     $('genba').value=d.genba||'';$('jusho').value=d.jusho||'';
     $('kyokyu').value=d.kyokyu||'単相3線式 100V/200V';
     $('keiyaku').value=d.keiyaku||'従量電灯B';$('amp').value=d.amp||'';
@@ -462,14 +510,22 @@ $('load').onclick=()=>{
     $('e1').checked=!!d.e1;$('e2').checked=!!d.e2;$('e3').checked=!!d.e3;
     $('e4').checked=!!d.e4;$('e5').checked=!!d.e5;$('e6').checked=!!d.e6;
     upd();
-    var mapData=JSON.parse(localStorage.getItem('denryoku_map')||'[]');
+    var mapData=JSON.parse(localStorage.getItem(STORAGE_KEY+'_map')||'[]');
     layer.clearLayers();actionStack=[];
+    // ① オート連番復元
+    labelCounter = mapData.filter(m=>m.type==='marker').length + 1;
+    transCounter = 1;
     mapData.forEach(item=>{
       var l;
       if(item.type==='circlemarker'){
         l=L.circleMarker(item.latlng,item.options);
         if(item.tooltip) l.bindTooltip('<div contenteditable="true" style="outline:none">'+item.tooltip+'</div>',{permanent:true,direction:'top',offset:[0,-10],className:'pole-label'}).openTooltip();
-      } else if(item.type==='marker') l=L.marker(item.latlng,item.options);
+      } else if(item.type==='marker'){
+        // 復元時もdraggable付与
+        item.options.draggable = true;
+        l=L.marker(item.latlng,item.options);
+        if(item.tooltip) l.bindTooltip('<div contenteditable="true" style="outline:none">'+item.tooltip+'</div>',{permanent:true,direction:'top',offset:[0,-10],className:'pole-label'}).openTooltip();
+      }
       else if(item.type==='polyline') l=L.polyline(item.latlngs,item.options);
       else if(item.type==='polygon') l=L.polygon(item.latlngs,item.options);
       if(l) addToLayer(l);
@@ -482,8 +538,10 @@ $('share').onclick=async()=>{
   try{
     var text=`${$('genba').value||'電力申請'}
 ${$('jusho').value||''}`;
-    if(navigator.share){await navigator.share({title:'電力申請',text:text});show('共有しました');}
-    else{await navigator.clipboard.writeText(text);show('コピーしました');}
+    try{
+      if(navigator.share){await navigator.share({title:'電力申請',text:text});show('共有しました');}
+      else{await navigator.clipboard.writeText(text);show('コピーしました');}
+    }catch(e){await navigator.clipboard.writeText(text);show('コピーしました');}
   }catch(e){show('共有不可');}
 };
 
@@ -506,6 +564,11 @@ $('mapUndo').onclick=()=>{
   if(!a){show('履歴なし');return;}
   if(a.type==='add'){layer.removeLayer(a.layer);show('追加取消');}
   else if(a.type==='del'){a.layer.addTo(layer);show('削除復元');}
+  else if(a.type==='move'){
+    if(a.layer.setLatLng) a.layer.setLatLng(a.prev);
+    else if(a.layer.setLatLngs) a.layer.setLatLngs(a.prev);
+    show('移動戻し');
+  }
 };
 
 // ③ ESCでキャンセル
@@ -519,7 +582,7 @@ document.addEventListener('keydown',e=>{
   }
 });
 
-upd();show('準備OK - v43.9');
+upd();show('準備OK - v44.0');
 setTimeout(()=>map.invalidateSize(true),600);
 window.addEventListener('resize',()=>map.invalidateSize(true));
 })();
